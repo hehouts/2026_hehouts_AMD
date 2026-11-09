@@ -4,9 +4,20 @@ date: "2026-11-09"
 output: html_document
 ---
 
-The slow step. Reads the recovery CSV from `01_build_manysearch_csvs.Rmd`, computes prevalence for every gate, method, and level, and writes small CSVs to `./intermediate_files/core_prevalence/`. Plots are in `03_core_prevalence_plots.Rmd`.
+# Compute prevalence tables
 
-Rerun only when the build CSV, `gate_cuts`, `gate_min_srr`, or `recov_ih_min` changes.
+requires:
+`manysearch_gate3_recov1.csv`
+  from `01_build_manysearch_csvs.Rmd`
+generates:
+``
+  in `core_prevalence/`
+
+
+Computes prevalence for every gate, recovery threshold, method, and level, and writes small CSVs to `core_prevalence/`. 
+
+This is a slow, more memory intensive step. (~5 minutes, with 64GB of mem)
+Rerun only needed when the build CSV, `gate_cuts`, `recov_cuts`, or `gate_min_srr` changes.
 
 ```{r setup}
 knitr::opts_chunk$set(echo = TRUE)
@@ -21,24 +32,24 @@ cat("tidyverse", as.character(packageVersion("tidyverse")), "loaded\n")
 build_gate_ih_min  <- 3
 build_recov_ih_min <- 1
 
-gate_cuts    <- c(3, 10, 20, 50)  # every gate the plot Rmd can use
-gate_min_srr <- 3                 # metagenomes that must meet the gate (1 = "ANY one")
-recov_ih_min <- 1                 # ih needed to keep a hit from a genome eligible for recovery
+gate_cuts    <- c(3, 10, 20, 50, 75)  # every gate the plot Rmd can use
+recov_cuts   <- c(1, 3, 10, 20)       # every recovery threshold (only pairs with recov <= gate are run)
+gate_min_srr <- 3                     # metagenomes that must meet the gate (1 = "ANY one")
 levels       <- c("species", "genus")
 
-stopifnot(all(gate_cuts >= build_gate_ih_min), recov_ih_min >= build_recov_ih_min)
+stopifnot(all(gate_cuts >= build_gate_ih_min), all(recov_cuts >= build_recov_ih_min))
 
 in_dir  <- "../manysearch"
 in_file <- file.path(in_dir, sprintf("manysearch_gate%d_recov%d.csv",
                                      build_gate_ih_min, build_recov_ih_min))
-out_dir <- "./intermediate_files/core_prevalence"
+out_dir <- "./core_prevalence"
 
 # denominator = all metagenomes, even ones with no hits
 n_srr <- length(list.files(in_dir, pattern = "^SRR.*\\.csv$"))
 
 cat(sprintf("Build CSV:  gate %d, recovery %d\n", build_gate_ih_min, build_recov_ih_min))
 cat("Gates:     ", paste(gate_cuts, collapse = ", "), sprintf("ih in >= %d metagenome(s)\n", gate_min_srr))
-cat(sprintf("Recovery:   >= %d ih\n", recov_ih_min))
+cat("Recovery:  ", paste(recov_cuts, collapse = ", "), "ih\n")
 cat("Levels:    ", paste(levels, collapse = ", "), "\n")
 cat("Output:    ", out_dir, "\n")
 ```
@@ -85,6 +96,8 @@ cat(n_distinct(recovered$match_name), "of", n_srr, "metagenomes have hits\n")
 
 `eligible_at(h)` returns the genomes that meet `h` ih in at least `gate_min_srr` metagenomes. The result is cached per gate, so the full table is scanned once per gate instead of once per `prevalence_at()` call. Rerunning this chunk clears the cache.
 
+`prevalence_at(h, recov, recover, level)` gives the prevalence of each taxon. The recovered method keeps hits from genomes eligible at gate `h` down to `recov` ih. Strict-only requires `h` everywhere and ignores `recov`.
+
 ```{r prevalence-fns}
 eligible_cache <- list()
 
@@ -101,9 +114,9 @@ eligible_at <- function(h) {
   eligible_cache[[key]]
 }
 
-prevalence_at <- function(h, recover = TRUE, level = "species") {
+prevalence_at <- function(h, recov = NA, recover = TRUE, level = "species") {
   d <- if (recover) {
-    recovered %>% filter(query_name %in% eligible_at(h), intersect_hashes >= recov_ih_min)
+    recovered %>% filter(query_name %in% eligible_at(h), intersect_hashes >= recov)
   } else {
     recovered %>% filter(intersect_hashes >= h)
   }
@@ -112,6 +125,7 @@ prevalence_at <- function(h, recover = TRUE, level = "species") {
     count(taxon, name = "n_present") %>%
     mutate(freq = n_present / n_srr,
            gate_ih = h,
+           recov_ih = if (recover) recov else NA_real_,
            level = level,
            method = if (recover) "recovered" else "strict only") %>%
     arrange(desc(freq))
@@ -128,18 +142,26 @@ for (h in gate_cuts) {
 
 ## 3. Prevalence grid
 
-Every gate, both methods, both levels.
+Recovered: every gate and recovery pair with recovery ≤ gate. Strict-only: every gate. Both levels.
 
 ```{r prevalence-grid}
+grid_specs <- bind_rows(
+  expand_grid(h = gate_cuts, recov = recov_cuts, recover = TRUE) %>% filter(recov <= h),
+  expand_grid(h = gate_cuts, recov = NA_real_,   recover = FALSE)
+) %>%
+  crossing(level = levels)
+
+cat(nrow(grid_specs), "combinations to compute\n")
+
 t0 <- Sys.time()
 
-prevalence_grid <- expand_grid(h = gate_cuts, recover = c(TRUE, FALSE), level = levels) %>%
-  pmap(\(h, recover, level) prevalence_at(h, recover, level)) %>%
+prevalence_grid <- grid_specs %>%
+  pmap(\(h, recov, recover, level) prevalence_at(h, recov, recover, level)) %>%
   list_rbind()
 
 cat(format(nrow(prevalence_grid), big.mark = ","), "rows in prevalence_grid, computed in",
     round(as.numeric(difftime(Sys.time(), t0, units = "secs"))), "seconds\n")
-prevalence_grid %>% count(level, method, gate_ih, name = "n_taxa") %>% print(n = Inf)
+prevalence_grid %>% count(level, method, gate_ih, recov_ih, name = "n_taxa") %>% print(n = Inf)
 ```
 
 ## 4. Diagnostics
@@ -177,14 +199,15 @@ cat(sprintf("  median metagenomes per genome: %.0f of %d | genomes in >= 90%% of
             noise$median_srrs, n_srr, noise$frac_genomes_in_90pct * 100))
 ```
 
-## 5. Write intermediate files
+## 5. Write output files
 
 ```{r write}
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 run_params <- tibble(
-  n_srr, gate_min_srr, recov_ih_min, build_gate_ih_min, build_recov_ih_min,
+  n_srr, gate_min_srr, build_gate_ih_min, build_recov_ih_min,
   gate_cuts    = paste(gate_cuts, collapse = ";"),
+  recov_cuts   = paste(recov_cuts, collapse = ";"),
   levels       = paste(levels, collapse = ";"),
   source_file  = in_path,
   source_mtime = format(in_mtime, "%Y-%m-%d %H:%M:%S"),

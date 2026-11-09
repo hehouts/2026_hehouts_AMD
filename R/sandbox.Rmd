@@ -15,11 +15,7 @@ library(tidyverse)
 
 
 
----
-title: "AMD core microbes, with low-coverage recovery"
-date: "2026-11-06"
-output: html_document
----
+=
 
 Finds the AMD core microbiome from the recovery CSV made by `build_manysearch_csvs.Rmd`. Run that first.
 
@@ -233,3 +229,72 @@ by_genus %>%
 
 ```
 
+
+
+
+
+
+```{r}
+core_strict_20 <- read_csv("intermediate_files/core_prevalence/prevalence_grid.csv", show_col_types = FALSE) %>%
+  filter(level == "species", method == "strict only", gate_ih == 20, freq >= 0.90) %>%
+  select(taxon, n_present, freq) %>%
+  arrange(desc(freq)) |> 
+  select(taxon)
+
+write_csv(core_strict_20, "intermediate_files/core_prevalence/core_species_strict_gate20_freq90.csv")
+```
+
+
+
+
+taxon,n_present,freq
+s__Escherichia coli,103,1
+s__Klebsiella pneumoniae,103,1
+s__Pseudomonas aeruginosa,103,1
+s__Salmonella enterica,101,0.9805825242718448
+s__Acinetobacter baumannii,100,0.970873786407767
+s__JAJZBZ01 sp021816455,97,0.941747572815534
+s__Acidiphilium multivorum,95,0.9223300970873788
+s__JAKAAZ01 sp021798735,95,0.9223300970873788
+s__JAKAAZ01 sp021802085,95,0.9223300970873788
+s__JAKAAZ01 sp021826695,95,0.9223300970873788
+s__Staphylococcus aureus,95,0.9223300970873788
+s__Vibrio parahaemolyticus,95,0.9223300970873788
+s__13-2-20CM-66-19 sp021838635,94,0.912621359223301
+s__Acidithiobacillus ferriphilus,94,0.912621359223301
+s__GCA-000496135 sp000496135,94,0.912621359223301
+s__JABEUN01 sp013044415,94,0.912621359223301
+s__Rhizomicrobium sp021851325,94,0.912621359223301
+s__Acidibrevibacterium sp021851785,93,0.9029126213592232
+s__Aeromonas veronii,93,0.9029126213592232
+s__B-DKE sp021792655,93,0.9029126213592232
+s__Ferrimicrobium sp021806545,93,0.9029126213592232
+s__Ferroplasma sp002505185,93,0.9029126213592232
+s__JAJYDT01 sp021777335,93,0.9029126213592232
+s__JAJZXF01 sp021802485,93,0.9029126213592232
+s__JAKACA01 sp021796455,93,0.9029126213592232taxon,n_present,freq
+s__Escherichia coli,103,1
+s__Klebsiella pneumoniae,103,1
+s__Pseudomonas aeruginosa,103,1
+s__Salmonella enterica,101,0.9805825242718448
+s__Acinetobacter baumannii,100,0.970873786407767
+s__JAJZBZ01 sp021816455,97,0.941747572815534
+s__Acidiphilium multivorum,95,0.9223300970873788
+s__JAKAAZ01 sp021798735,95,0.9223300970873788
+s__JAKAAZ01 sp021802085,95,0.9223300970873788
+s__JAKAAZ01 sp021826695,95,0.9223300970873788
+s__Staphylococcus aureus,95,0.9223300970873788
+s__Vibrio parahaemolyticus,95,0.9223300970873788
+s__13-2-20CM-66-19 sp021838635,94,0.912621359223301
+s__Acidithiobacillus ferriphilus,94,0.912621359223301
+s__GCA-000496135 sp000496135,94,0.912621359223301
+s__JABEUN01 sp013044415,94,0.912621359223301
+s__Rhizomicrobium sp021851325,94,0.912621359223301
+s__Acidibrevibacterium sp021851785,93,0.9029126213592232
+s__Aeromonas veronii,93,0.9029126213592232
+s__B-DKE sp021792655,93,0.9029126213592232
+s__Ferrimicrobium sp021806545,93,0.9029126213592232
+s__Ferroplasma sp002505185,93,0.9029126213592232
+s__JAJYDT01 sp021777335,93,0.9029126213592232
+s__JAJZXF01 sp021802485,93,0.9029126213592232
+s__JAKACA01 sp021796455,93,0.9029126213592232

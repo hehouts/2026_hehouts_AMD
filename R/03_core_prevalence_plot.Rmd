@@ -4,68 +4,92 @@ date: "2026-11-09"
 output: html_document
 ---
 
+https://github.com/hehouts/2026_hehouts_AMD
+
+## Summary
+This report looks for a core microbial community in acid mine drainage (AMD) water across 103 publicly archived metagenomes from six BioProjects. The approach is k-mer-based and doesn’t depend on location; it was first developed for pig gut microbiome work. Each metagenome is searched against the GTDB rs226 species-level pangenome sketch using sourmash branchwater manysearch, with no minimum threshold, so low-abundance taxa are kept and filtering happens afterward. Species prevalence is summarized across samples, and core candidates are species present in at least 95% of metagenomes. These results are shown at several containment thresholds (0.05, 0.10 and 0.20) so you can see how sensitive the core is to the cutoff. Candidates are compared with the five core genera from prior metagenome-based work by M. Tran (126 metagenomes from the same BioProjects) and with well-known AMD acidophiles such as Acidithiobacillus, Leptospirillum, Ferrovum and Gallionella.
+
+### More info
+- Number of metagenomes: 103
+- BioProjects: (6) PRJNA554371, PRJNA907387, PRJNA785287, PRJNA576319, PRJNA666025, PRJNA540505
+- Number of distinct sites: 
+- Sample map: [figure: sample locations, colored by BioProject]
+- Inclusion/exclusion criteria: 
+- Note on sample count: 103 here vs. 126 in Tran (same BioProjects); reason: 
+- Database: GTDB rs226, species-level singleton pangenome sketch (CDS-only k-mers, shared k-mers removed) built on _____
+- Number of species in database: 
+- Sketch file: gtdb-cds-rs226.species.singleton.sig.zip
+- k-mer size: k=21
+- Scaled value: 1000
+
+
+# Core prevalence plots
+
 The fast step. Reads the small CSVs written by `02_core_prevalence_compute.Rmd` and makes the core lists, recovery gain tables, and sensitivity plots. Nothing here touches the big recovery CSV.
 
-```{r setup}
+```{r setup, include = FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
-cat("tidyverse", as.character(packageVersion("tidyverse")), "loaded\n")
 ```
 
 ## Parameters
 
-Everything here can be changed without rerunning the compute Rmd. `gate_ih_min` has to be one of the gates in the computed grid.
+Everything here can be changed without rerunning the compute Rmd. `gate_ih_min` has to be in the computed `gate_cuts`, `recov_ih_min` has to be in `recov_cuts`, and recovery can't be higher than the gate.
 
 ```{r params}
-gate_ih_min <- 20                               # gate used for the core lists and recovery gain
-min_freq    <- 0.90                             # prevalence cutoff for "core"
-freq_cuts   <- c(0.80, 0.85, 0.90, 0.95, 0.999) # prevalence cutoffs for the sensitivity plots
+gate_ih_min  <- 20                               # gate used for the core lists, recovery gain, and plot 1
+recov_ih_min <- 1                                # recovery threshold used for the core lists, recovery gain, and plot 1
+min_freq     <- 0.90                             # prevalence cutoff for "core"
+freq_cuts    <- c(0.80, 0.85, 0.90, 0.95, 0.999) # prevalence cutoffs for the sensitivity plots
 
 plural <- c(species = "species", genus = "genera")
-in_dir <- "./intermediate_files/core_prevalence"
+in_dir <- "./core_prevalence"
 
-cat(sprintf("Core:  >= %.1f%% prevalence at gate %d\n", min_freq * 100, gate_ih_min))
+cat(sprintf("Core:  >= %.1f%% prevalence at gate %d, recovery %d\n", min_freq * 100, gate_ih_min, recov_ih_min))
 cat("Sensitivity cutoffs:", paste(freq_cuts, collapse = ", "), "\n")
 ```
 
-## 1. Load the intermediate files
+## 1. Load the prevalence files
 
 ```{r load}
 grid_file   <- file.path(in_dir, "prevalence_grid.csv")
 params_file <- file.path(in_dir, "run_params.csv")
 if (!all(file.exists(grid_file, params_file))) {
-  stop('Intermediate files not found in "', in_dir, '". Run 02_core_prevalence_compute.Rmd first.')
+  stop('Files not found in "', in_dir, '". Run 02_core_prevalence_compute.Rmd first.')
 }
 
 prevalence_grid <- read_csv(grid_file, show_col_types = FALSE,
-                            col_types = cols(taxon = "c", n_present = "d", freq = "d",
-                                             gate_ih = "d", level = "c", method = "c"))
+                            col_types = cols(taxon = "c", n_present = "i", freq = "d",
+                                             gate_ih = "i", recov_ih = "i",
+                                             level = "c", method = "c"))
 run_params <- read_csv(params_file, col_types = cols(.default = "c"))
 
-n_srr     <- as.integer(run_params$n_srr)
-levels    <- str_split_1(run_params$levels, ";")
-gate_cuts <- sort(unique(prevalence_grid$gate_ih))
+n_srr      <- as.integer(run_params$n_srr)
+levels     <- str_split_1(run_params$levels, ";")
+gate_cuts  <- sort(unique(prevalence_grid$gate_ih))
+recov_cuts <- sort(unique(na.omit(prevalence_grid$recov_ih)))
 
-stopifnot(gate_ih_min %in% gate_cuts)
+stopifnot(gate_ih_min %in% gate_cuts, recov_ih_min %in% recov_cuts, recov_ih_min <= gate_ih_min)
 
 cat(format(nrow(prevalence_grid), big.mark = ","), "rows in prevalence_grid, computed", run_params$computed, "\n")
-cat(sprintf("Computed with gate_min_srr %s, recov_ih_min %s, %d metagenomes\n",
-            run_params$gate_min_srr, run_params$recov_ih_min, n_srr))
-cat("Gates available:", paste(gate_cuts, collapse = ", "), "\n")
+cat(sprintf("Computed with gate_min_srr %s, %d metagenomes\n", run_params$gate_min_srr, n_srr))
+cat("Gates available:   ", paste(gate_cuts, collapse = ", "), "\n")
+cat("Recovery available:", paste(recov_cuts, collapse = ", "), "\n")
 
 # warn if the build CSV changed after the compute step
 src <- run_params$source_file
 if (file.exists(src) && format(file.mtime(src), "%Y-%m-%d %H:%M:%S") != run_params$source_mtime) {
   cat("WARNING: the build CSV has changed since these were computed. Rerun 02_core_prevalence_compute.Rmd.\n")
 } else {
-  cat("Intermediate files match the current build CSV\n")
+  cat("Prevalence files match the current build CSV\n")
 }
 ```
 
-## 2. Core at the main gate
+## 2. Core at the chosen gate and recovery
 
 ```{r core}
-by_level <- map(levels, \(l) filter(prevalence_grid, gate_ih == gate_ih_min, method == "recovered", level == l)) %>%
+by_level <- map(levels, \(l) filter(prevalence_grid, gate_ih == gate_ih_min, recov_ih == recov_ih_min,
+                                    method == "recovered", level == l)) %>%
   set_names(levels)
 core <- map(by_level, \(d) filter(d, freq >= min_freq))
 
@@ -82,10 +106,11 @@ for (l in levels) {
 
 ## 3. Recovery gain
 
-A full join keeps taxa found only by strict-only, so negative gains show up too. Those come from genomes that meet the gate in fewer than `gate_min_srr` metagenomes: strict-only counts them, but they aren't eligible for recovery.
+Recovered at the chosen gate and recovery, compared with strict-only at the same gate. A full join keeps taxa found only by strict-only, so negative gains show up too. Those come from genomes that meet the gate in fewer than `gate_min_srr` metagenomes: strict-only counts them, but they aren't eligible for recovery.
 
 ```{r recovery-gain}
-strict_by_level <- map(levels, \(l) filter(prevalence_grid, gate_ih == gate_ih_min, method == "strict only", level == l)) %>%
+strict_by_level <- map(levels, \(l) filter(prevalence_grid, gate_ih == gate_ih_min,
+                                           method == "strict only", level == l)) %>%
   set_names(levels)
 
 gain_at <- function(l) {
@@ -110,32 +135,46 @@ for (l in levels) {
 
 ## 4. Core counts
 
+`series` labels each column: "recov 1", "recov 3", and so on for the recovered method, and "strict only".
+
 ```{r core-counts}
+series_levels <- c(paste("recov", recov_cuts), "strict only")
+
 core_counts <- prevalence_grid %>%
   crossing(min_freq = freq_cuts) %>%
-  summarize(n_core = sum(freq >= min_freq), .by = c(level, method, gate_ih, min_freq))
+  summarize(n_core = sum(freq >= min_freq), .by = c(level, method, gate_ih, recov_ih, min_freq)) %>%
+  mutate(series = factor(if_else(method == "strict only", "strict only", paste("recov", recov_ih)),
+                         levels = series_levels))
 
-cat("Core counts by level, gate, and method\n")
-core_counts %>%
-  pivot_wider(names_from = method, values_from = n_core) %>%
-  arrange(level, min_freq, gate_ih) %>%
-  print(n = Inf)
+for (l in levels) {
+  cat("\nCore", plural[[l]], "by gate, recovery, and prevalence cutoff (blank = recovery above gate)\n")
+  core_counts %>%
+    filter(level == l) %>%
+    select(gate_ih, min_freq, series, n_core) %>%
+    pivot_wider(names_from = series, values_from = n_core, names_sort = TRUE) %>%
+    arrange(min_freq, gate_ih) %>%
+    print(n = Inf)
+}
 ```
 
 ## 5. Sensitivity plots
 
-```{r plots}
-method_colors <- c("recovered" = "#A0522D", "strict only" = "#D2B48C")
+Plots 1 to 3 compare recovered (at `recov_ih_min`) with strict-only. Plot 4 compares the recovery thresholds with each other. Gates below a recovery threshold have no bar for it.
 
-plot_core <- function(d, title) {
+```{r plots, fig.width = 11, fig.height = 7}
+method_colors <- c("recovered" = "#A0522D", "strict only" = "#D2B48C")
+recov_colors  <- setNames(colorRampPalette(c("#F5DEB3", "#5C3317"))(length(recov_cuts)),
+                          paste("recov", recov_cuts))
+
+plot_core <- function(d, title, fill_var, fill_values) {
   d %>%
     mutate(level = factor(level, levels = levels)) %>%
-    ggplot(aes(x = factor(min_freq), y = n_core, fill = method)) +
+    ggplot(aes(x = factor(min_freq), y = n_core, fill = .data[[fill_var]])) +
     geom_col(position = position_dodge(0.8), width = 0.75) +
     geom_text(aes(label = n_core), position = position_dodge(0.8),
               angle = 90, hjust = -0.2, size = 3, color = "#5C3317") +
     scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
-    scale_fill_manual(values = method_colors) +
+    scale_fill_manual(values = fill_values) +
     facet_grid(level ~ gate_ih, scales = "free_y",
                labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " ih"))) +
     labs(x = "Minimum prevalence (fraction of metagenomes)",
@@ -146,16 +185,40 @@ plot_core <- function(d, title) {
           panel.grid.major.x = element_blank())
 }
 
+# recovered at the chosen recovery threshold, plus strict-only
+at_recov <- core_counts %>% filter(method == "strict only" | recov_ih == recov_ih_min)
+
 plots <- list(
-  both      = plot_core(core_counts, "AMD core size, recovered vs strict-only"),
-  recovered = plot_core(filter(core_counts, method == "recovered"), "AMD core size, recovered only"),
-  strict    = plot_core(filter(core_counts, method == "strict only"), "AMD core size, strict-only")
+  both      = plot_core(at_recov,
+                        sprintf("AMD core size, recovered (recov %d) vs strict-only", recov_ih_min),
+                        "method", method_colors),
+  recovered = plot_core(filter(at_recov, method == "recovered"),
+                        sprintf("AMD core size, recovered only (recov %d)", recov_ih_min),
+                        "method", method_colors),
+  strict    = plot_core(filter(at_recov, method == "strict only"),
+                        "AMD core size, strict-only",
+                        "method", method_colors),
+  by_recov  = plot_core(filter(core_counts, method == "recovered"),
+                        "AMD core size by recovery threshold",
+                        "series", recov_colors)
 )
 
 for (p in names(plots)) {
   cat("Plot:", plots[[p]]$labels$title, "\n")
   print(plots[[p]])
 }
+```
+
+
+## Get species names
+```{r}
+core_strict_20 <- read_csv("intermediate_files/core_prevalence/prevalence_grid.csv", show_col_types = FALSE) %>%
+  filter(level == "species", method == "strict only", gate_ih == 20, freq >= 0.90) %>%
+  select(taxon, n_present, freq) %>%
+  arrange(desc(freq)) |> 
+  select(taxon)
+
+write_csv(core_strict_20, "intermediate_files/core_prevalence/core_species_strict_gate20_freq90.csv")
 ```
 
 ## Ideas
