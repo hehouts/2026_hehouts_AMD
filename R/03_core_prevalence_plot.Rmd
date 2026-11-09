@@ -1,0 +1,165 @@
+---
+title: "AMD core microbes, plots"
+date: "2026-11-09"
+output: html_document
+---
+
+The fast step. Reads the small CSVs written by `02_core_prevalence_compute.Rmd` and makes the core lists, recovery gain tables, and sensitivity plots. Nothing here touches the big recovery CSV.
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+cat("tidyverse", as.character(packageVersion("tidyverse")), "loaded\n")
+```
+
+## Parameters
+
+Everything here can be changed without rerunning the compute Rmd. `gate_ih_min` has to be one of the gates in the computed grid.
+
+```{r params}
+gate_ih_min <- 20                               # gate used for the core lists and recovery gain
+min_freq    <- 0.90                             # prevalence cutoff for "core"
+freq_cuts   <- c(0.80, 0.85, 0.90, 0.95, 0.999) # prevalence cutoffs for the sensitivity plots
+
+plural <- c(species = "species", genus = "genera")
+in_dir <- "./intermediate_files/core_prevalence"
+
+cat(sprintf("Core:  >= %.1f%% prevalence at gate %d\n", min_freq * 100, gate_ih_min))
+cat("Sensitivity cutoffs:", paste(freq_cuts, collapse = ", "), "\n")
+```
+
+## 1. Load the intermediate files
+
+```{r load}
+grid_file   <- file.path(in_dir, "prevalence_grid.csv")
+params_file <- file.path(in_dir, "run_params.csv")
+if (!all(file.exists(grid_file, params_file))) {
+  stop('Intermediate files not found in "', in_dir, '". Run 02_core_prevalence_compute.Rmd first.')
+}
+
+prevalence_grid <- read_csv(grid_file, show_col_types = FALSE,
+                            col_types = cols(taxon = "c", n_present = "d", freq = "d",
+                                             gate_ih = "d", level = "c", method = "c"))
+run_params <- read_csv(params_file, col_types = cols(.default = "c"))
+
+n_srr     <- as.integer(run_params$n_srr)
+levels    <- str_split_1(run_params$levels, ";")
+gate_cuts <- sort(unique(prevalence_grid$gate_ih))
+
+stopifnot(gate_ih_min %in% gate_cuts)
+
+cat(format(nrow(prevalence_grid), big.mark = ","), "rows in prevalence_grid, computed", run_params$computed, "\n")
+cat(sprintf("Computed with gate_min_srr %s, recov_ih_min %s, %d metagenomes\n",
+            run_params$gate_min_srr, run_params$recov_ih_min, n_srr))
+cat("Gates available:", paste(gate_cuts, collapse = ", "), "\n")
+
+# warn if the build CSV changed after the compute step
+src <- run_params$source_file
+if (file.exists(src) && format(file.mtime(src), "%Y-%m-%d %H:%M:%S") != run_params$source_mtime) {
+  cat("WARNING: the build CSV has changed since these were computed. Rerun 02_core_prevalence_compute.Rmd.\n")
+} else {
+  cat("Intermediate files match the current build CSV\n")
+}
+```
+
+## 2. Core at the main gate
+
+```{r core}
+by_level <- map(levels, \(l) filter(prevalence_grid, gate_ih == gate_ih_min, method == "recovered", level == l)) %>%
+  set_names(levels)
+core <- map(by_level, \(d) filter(d, freq >= min_freq))
+
+for (l in levels) {
+  cat(sprintf("%s: %d core %s at >= %.1f%% prevalence (of %d detected)\n",
+              l, nrow(core[[l]]), plural[[l]], min_freq * 100, nrow(by_level[[l]])))
+}
+
+for (l in levels) {
+  cat("\nCore", plural[[l]], "\n")
+  core[[l]] %>% select(taxon, n_present, freq) %>% print(n = 30)
+}
+```
+
+## 3. Recovery gain
+
+A full join keeps taxa found only by strict-only, so negative gains show up too. Those come from genomes that meet the gate in fewer than `gate_min_srr` metagenomes: strict-only counts them, but they aren't eligible for recovery.
+
+```{r recovery-gain}
+strict_by_level <- map(levels, \(l) filter(prevalence_grid, gate_ih == gate_ih_min, method == "strict only", level == l)) %>%
+  set_names(levels)
+
+gain_at <- function(l) {
+  full_join(by_level[[l]]        %>% select(taxon, freq_recovered = freq),
+            strict_by_level[[l]] %>% select(taxon, freq_strict    = freq),
+            by = "taxon") %>%
+    mutate(across(c(freq_recovered, freq_strict), \(x) replace_na(x, 0)),
+           gain = freq_recovered - freq_strict) %>%
+    arrange(desc(gain))
+}
+
+gains <- map(levels, gain_at) %>% set_names(levels)
+
+for (l in levels) {
+  g <- gains[[l]]
+  cat(sprintf("\n%s: %d gained, %d unchanged, %d lost (median gain %.2f)\n",
+              l, sum(g$gain > 0), sum(g$gain == 0), sum(g$gain < 0), median(g$gain)))
+  cat("Top 10 gains\n")
+  print(head(g, 10))
+}
+```
+
+## 4. Core counts
+
+```{r core-counts}
+core_counts <- prevalence_grid %>%
+  crossing(min_freq = freq_cuts) %>%
+  summarize(n_core = sum(freq >= min_freq), .by = c(level, method, gate_ih, min_freq))
+
+cat("Core counts by level, gate, and method\n")
+core_counts %>%
+  pivot_wider(names_from = method, values_from = n_core) %>%
+  arrange(level, min_freq, gate_ih) %>%
+  print(n = Inf)
+```
+
+## 5. Sensitivity plots
+
+```{r plots}
+method_colors <- c("recovered" = "#A0522D", "strict only" = "#D2B48C")
+
+plot_core <- function(d, title) {
+  d %>%
+    mutate(level = factor(level, levels = levels)) %>%
+    ggplot(aes(x = factor(min_freq), y = n_core, fill = method)) +
+    geom_col(position = position_dodge(0.8), width = 0.75) +
+    geom_text(aes(label = n_core), position = position_dodge(0.8),
+              angle = 90, hjust = -0.2, size = 3, color = "#5C3317") +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    scale_fill_manual(values = method_colors) +
+    facet_grid(level ~ gate_ih, scales = "free_y",
+               labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " ih"))) +
+    labs(x = "Minimum prevalence (fraction of metagenomes)",
+         y = "Number of core taxa", fill = NULL, title = title) +
+    theme_minimal() +
+    theme(legend.position = "top",
+          strip.text = element_text(face = "bold", color = "#5C3317"),
+          panel.grid.major.x = element_blank())
+}
+
+plots <- list(
+  both      = plot_core(core_counts, "AMD core size, recovered vs strict-only"),
+  recovered = plot_core(filter(core_counts, method == "recovered"), "AMD core size, recovered only"),
+  strict    = plot_core(filter(core_counts, method == "strict only"), "AMD core size, strict-only")
+)
+
+for (p in names(plots)) {
+  cat("Plot:", plots[[p]]$labels$title, "\n")
+  print(plots[[p]])
+}
+```
+
+## Ideas
+
+- Core by region or by metal contaminant?
+- Are there categories of AMD? Suspected founder taxa?
+- Have any sites been bioremediated?

@@ -1,0 +1,12 @@
+executor: slurm
+jobs: 50                 # max concurrent sbatch jobs
+use-conda: true
+keep-going: true
+rerun-incomplete: true
+printshellcmds: true
+latency-wait: 120         # NFS lag tolerance
+default-resources:
+  slurm_account: ctbrowngrp
+  slurm_partition: bmh
+  mem_mb: 4000
+  runtime: 60

@@ -1,0 +1,11 @@
+.snakemake/
+*.sig
+*.sig.zip
+*.zip
+*.csv
+*.fastq*
+*.fa*
+logs/
+slurm-*.out
+__pycache__/
+.ipynb_checkpoints

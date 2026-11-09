@@ -1,0 +1,212 @@
+---
+title: "AMD core microbes, compute prevalence tables"
+date: "2026-11-09"
+output: html_document
+---
+
+The slow step. Reads the recovery CSV from `01_build_manysearch_csvs.Rmd`, computes prevalence for every gate, method, and level, and writes small CSVs to `./intermediate_files/core_prevalence/`. Plots are in `03_core_prevalence_plots.Rmd`.
+
+Rerun only when the build CSV, `gate_cuts`, `gate_min_srr`, or `recov_ih_min` changes.
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+cat("tidyverse", as.character(packageVersion("tidyverse")), "loaded\n")
+```
+
+## Parameters
+
+```{r params}
+# thresholds the build CSV was made with (must match the file name)
+build_gate_ih_min  <- 3
+build_recov_ih_min <- 1
+
+gate_cuts    <- c(3, 10, 20, 50)  # every gate the plot Rmd can use
+gate_min_srr <- 3                 # metagenomes that must meet the gate (1 = "ANY one")
+recov_ih_min <- 1                 # ih needed to keep a hit from a genome eligible for recovery
+levels       <- c("species", "genus")
+
+stopifnot(all(gate_cuts >= build_gate_ih_min), recov_ih_min >= build_recov_ih_min)
+
+in_dir  <- "../manysearch"
+in_file <- file.path(in_dir, sprintf("manysearch_gate%d_recov%d.csv",
+                                     build_gate_ih_min, build_recov_ih_min))
+out_dir <- "./intermediate_files/core_prevalence"
+
+# denominator = all metagenomes, even ones with no hits
+n_srr <- length(list.files(in_dir, pattern = "^SRR.*\\.csv$"))
+
+cat(sprintf("Build CSV:  gate %d, recovery %d\n", build_gate_ih_min, build_recov_ih_min))
+cat("Gates:     ", paste(gate_cuts, collapse = ", "), sprintf("ih in >= %d metagenome(s)\n", gate_min_srr))
+cat(sprintf("Recovery:   >= %d ih\n", recov_ih_min))
+cat("Levels:    ", paste(levels, collapse = ", "), "\n")
+cat("Output:    ", out_dir, "\n")
+```
+
+## 1. Load the recovery CSV
+
+```{r load}
+if (!file.exists(in_file)) stop('"', in_file, '" not found. Run 01_build_manysearch_csvs.Rmd first.')
+
+in_path  <- normalizePath(in_file)
+in_mtime <- file.mtime(in_file)
+
+# skip the read if recovered is already in memory from this exact file version
+already_loaded <- exists("recovered") &&
+                  exists("recovered_src") && identical(recovered_src, in_path) &&
+                  exists("recovered_mtime") && identical(recovered_mtime, in_mtime)
+
+if (already_loaded) {
+  cat(sprintf('"%s" not reloaded, already in memory (last built %s)\n',
+              in_path, format(in_mtime, "%Y-%m-%d %H:%M")))
+} else {
+  recovered <- read_csv(in_file,
+                        col_types = cols(query_name = "c", match_name = "c",
+                                         intersect_hashes = "d", species = "c"),
+                        show_col_types = FALSE) %>%
+    mutate(genus = word(str_trim(query_name), 2))
+
+  recovered_src   <- in_path
+  recovered_mtime <- in_mtime
+  cat(sprintf('"%s" loaded (last built %s)\n',
+              in_path, format(in_mtime, "%Y-%m-%d %H:%M")))
+}
+
+taxa_key <- distinct(recovered, query_name, species, genus)
+
+cat(format(nrow(recovered), big.mark = ","), "rows\n")
+cat(nrow(taxa_key), "genomes,",
+    n_distinct(taxa_key$species), "species,",
+    n_distinct(taxa_key$genus), "genera\n")
+cat(n_distinct(recovered$match_name), "of", n_srr, "metagenomes have hits\n")
+```
+
+## 2. Prevalence functions
+
+`eligible_at(h)` returns the genomes that meet `h` ih in at least `gate_min_srr` metagenomes. The result is cached per gate, so the full table is scanned once per gate instead of once per `prevalence_at()` call. Rerunning this chunk clears the cache.
+
+```{r prevalence-fns}
+eligible_cache <- list()
+
+eligible_at <- function(h) {
+  key <- as.character(h)
+  if (is.null(eligible_cache[[key]])) {
+    eligible_cache[[key]] <<- recovered %>%
+      filter(intersect_hashes >= h) %>%
+      distinct(query_name, match_name) %>%
+      count(query_name) %>%
+      filter(n >= gate_min_srr) %>%
+      pull(query_name)
+  }
+  eligible_cache[[key]]
+}
+
+prevalence_at <- function(h, recover = TRUE, level = "species") {
+  d <- if (recover) {
+    recovered %>% filter(query_name %in% eligible_at(h), intersect_hashes >= recov_ih_min)
+  } else {
+    recovered %>% filter(intersect_hashes >= h)
+  }
+  d %>%
+    distinct(taxon = .data[[level]], match_name) %>%
+    count(taxon, name = "n_present") %>%
+    mutate(freq = n_present / n_srr,
+           gate_ih = h,
+           level = level,
+           method = if (recover) "recovered" else "strict only") %>%
+    arrange(desc(freq))
+}
+
+for (h in gate_cuts) {
+  e <- eligible_at(h)
+  cat(sprintf("gate %2d: %d of %d genomes eligible for recovery (%d species, %d genera)\n",
+              h, length(e), nrow(taxa_key),
+              n_distinct(taxa_key$species[taxa_key$query_name %in% e]),
+              n_distinct(taxa_key$genus[taxa_key$query_name %in% e])))
+}
+```
+
+## 3. Prevalence grid
+
+Every gate, both methods, both levels.
+
+```{r prevalence-grid}
+t0 <- Sys.time()
+
+prevalence_grid <- expand_grid(h = gate_cuts, recover = c(TRUE, FALSE), level = levels) %>%
+  pmap(\(h, recover, level) prevalence_at(h, recover, level)) %>%
+  list_rbind()
+
+cat(format(nrow(prevalence_grid), big.mark = ","), "rows in prevalence_grid, computed in",
+    round(as.numeric(difftime(Sys.time(), t0, units = "secs"))), "seconds\n")
+prevalence_grid %>% count(level, method, gate_ih, name = "n_taxa") %>% print(n = Inf)
+```
+
+## 4. Diagnostics
+
+These need the full table, so they stay here.
+
+```{r diagnostics}
+cat("Denominator check (freq should never exceed 1)\n")
+cat("  n_srr:", n_srr, "| metagenomes with hits:", n_distinct(recovered$match_name),
+    "| freq range:", paste(round(range(prevalence_grid$freq), 3), collapse = " to "), "\n")
+
+cat("\nName parsing\n")
+cat("  NA species:", sum(is.na(taxa_key$species)),
+    "| NA genus:", sum(is.na(taxa_key$genus)), "\n")
+cat("  First 5 genome names\n")
+writeLines(paste("   ", head(taxa_key$query_name, 5)))
+
+cat("\nMost reference genomes per species (pooling inflates these)\n")
+taxa_key %>% count(species, sort = TRUE, name = "n_genomes") %>% head(10) %>% print()
+
+cat("\nMost reference genomes per genus\n")
+taxa_key %>% count(genus, sort = TRUE, name = "n_genomes") %>% head(10) %>% print()
+
+cat("\nRecovered rows by ih bin\n")
+recovered %>% count(ih_bin = cut(intersect_hashes, c(0, 2, 9, 19, 49, Inf))) %>% print()
+
+cat("\nAre 1-2 ih hits everywhere? (if most genomes hit most metagenomes this way, it's noise)\n")
+noise <- recovered %>%
+  filter(intersect_hashes < 3) %>%
+  distinct(query_name, match_name) %>%
+  count(query_name) %>%
+  summarize(median_srrs = median(n),
+            frac_genomes_in_90pct = mean(n >= 0.9 * n_srr))
+cat(sprintf("  median metagenomes per genome: %.0f of %d | genomes in >= 90%% of metagenomes: %.1f%%\n",
+            noise$median_srrs, n_srr, noise$frac_genomes_in_90pct * 100))
+```
+
+## 5. Write intermediate files
+
+```{r write}
+dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
+
+run_params <- tibble(
+  n_srr, gate_min_srr, recov_ih_min, build_gate_ih_min, build_recov_ih_min,
+  gate_cuts    = paste(gate_cuts, collapse = ";"),
+  levels       = paste(levels, collapse = ";"),
+  source_file  = in_path,
+  source_mtime = format(in_mtime, "%Y-%m-%d %H:%M:%S"),
+  computed     = format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+)
+
+write_csv(prevalence_grid, file.path(out_dir, "prevalence_grid.csv"))
+write_csv(run_params,      file.path(out_dir, "run_params.csv"))
+
+for (f in c("prevalence_grid.csv", "run_params.csv")) {
+  p <- file.path(out_dir, f)
+  cat(sprintf('"%s" written (%s bytes)\n', normalizePath(p), format(file.size(p), big.mark = ",")))
+}
+```
+
+## Cleanup
+
+```{r cleanup}
+# everything the plot Rmd needs is on disk, so drop it all (add "recovered" to keep it between runs)
+keep <- c()
+dropped <- setdiff(ls(), keep)
+rm(list = dropped)
+gc(verbose = FALSE)
+cat("Removed", length(dropped), "objects\n")
+```

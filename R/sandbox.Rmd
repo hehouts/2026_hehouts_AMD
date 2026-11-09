@@ -1,0 +1,235 @@
+---
+title: "num core microbes"
+date: "2026-11-05"
+output: html_document
+---
+
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+
+#df_complete_manysearch <- read_csv("../manysearch/manysearch_output_min_int_3.csv")
+```
+
+
+
+
+---
+title: "AMD core microbes, with low-coverage recovery"
+date: "2026-11-06"
+output: html_document
+---
+
+Finds the AMD core microbiome from the recovery CSV made by `build_manysearch_csvs.Rmd`. Run that first.
+
+### Terms
+ih = intersect hashes.
+
+`gate_ih_min`: Reference genomes that meet the `gate_ih_min` threshold in at least `gate_min_srr` metagenomes are eligible for recovery in every metagenome.
+
+`recov_ih_min`: If a reference genome is eligible for recovery, its hits in other metagenomes are kept as long as they meet this threshold.
+
+The build CSV was made at gate 3, recovery 1 ("any 3 saves all 1"), which is the most inclusive setting. Any stricter gate or recovery threshold used here is a subset of it, so one CSV serves every cutoff.
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```
+
+## Parameters
+
+```{r params}
+# thresholds the build CSV was made with (must match the file name)
+build_gate_ih_min  <- 3
+build_recov_ih_min <- 1
+
+# analysis thresholds (must be >= the build values)
+gate_ih_min  <- 20    # main gate: ih needed in one metagenome (20 or 50)
+gate_min_srr <- 3     # metagenomes that must meet the gate (1 = "ANY one", raise to be stricter)
+recov_ih_min <- 1     # ih needed to keep a hit from a genome eligible for recovery (try 3 if 1-2 ih hits look like noise)
+min_freq     <- 0.90  # prevalence cutoff for "core"
+
+stopifnot(gate_ih_min >= build_gate_ih_min, recov_ih_min >= build_recov_ih_min)
+
+in_dir  <- "../manysearch"
+in_file <- file.path(in_dir, sprintf("manysearch_gate%d_recov%d.csv",
+                                     build_gate_ih_min, build_recov_ih_min))
+
+# denominator = all metagenomes, even ones with no hits
+n_srr <- length(list.files(in_dir, pattern = "^SRR.*\\.csv$"))
+```
+
+## 1. Load the recovery CSV
+
+```{r load}
+if (!file.exists(in_file)) stop('"', in_file, '" not found. Run build_manysearch_csvs.Rmd first.')
+
+recovered <- read_csv(in_file,
+                      col_types = cols(query_name = "c", match_name = "c",
+                                       intersect_hashes = "d", species = "c"))
+
+species_key <- distinct(recovered, query_name, species)
+
+cat(format(nrow(recovered), big.mark = ","), "rows loaded from", normalizePath(in_file), "\n")
+cat(nrow(species_key), "genomes,", n_distinct(recovered$match_name), "of", n_srr, "metagenomes with hits\n")
+```
+
+## 2. Prevalence functions
+
+`eligible_at(h)` returns the genomes that meet `h` ih in at least `gate_min_srr` metagenomes, which are the genomes eligible for recovery at that gate. In `prev_at()`, the recovered method keeps their hits down to `recov_ih_min`, while strict-only requires `h` everywhere.
+
+```{r prevalence-fns}
+eligible_at <- function(h) {
+  recovered %>%
+    filter(intersect_hashes >= h) %>%
+    distinct(query_name, match_name) %>%
+    count(query_name) %>%
+    filter(n >= gate_min_srr) %>%
+    pull(query_name)
+}
+
+prev_at <- function(h, recover = TRUE) {
+  d <- if (recover) {
+    recovered %>% filter(query_name %in% eligible_at(h), intersect_hashes >= recov_ih_min)
+  } else {
+    recovered %>% filter(intersect_hashes >= h)
+  }
+  d %>%
+    distinct(species, match_name) %>%
+    count(species, name = "n_present") %>%
+    mutate(freq = n_present / n_srr,
+           gate_ih = h,
+           method = if (recover) "recovered" else "strict only") %>%
+    arrange(desc(freq))
+}
+```
+
+## 3. Core at the main gate
+
+```{r core}
+by_species <- prev_at(gate_ih_min, recover = TRUE)
+core <- by_species %>% filter(freq >= min_freq)
+
+nrow(core)
+
+by_species %>%
+  summarize(at_80 = sum(freq >= 0.80),
+            at_90 = sum(freq >= 0.90),
+            at_95 = sum(freq >= 0.95))
+```
+
+Which species gained the most prevalence from recovery?
+
+```{r recovery-gain}
+strict <- prev_at(gate_ih_min, recover = FALSE)
+
+by_species %>%
+  select(species, freq_recovered = freq) %>%
+  left_join(strict %>% select(species, freq_strict = freq), by = "species") %>%
+  mutate(freq_strict = replace_na(freq_strict, 0),
+         gain = freq_recovered - freq_strict) %>%
+  arrange(desc(gain)) %>%
+  head(15)
+```
+
+## 4. Sensitivity, recovered vs strict-only
+
+```{r core-sensitivity}
+gate_cuts <- c(3, 10, 20, 50)
+freq_cuts <- c(0.80, 0.85, 0.90, 0.95, 0.999)
+
+stopifnot(all(gate_cuts >= build_gate_ih_min))
+
+prev_grid <- expand_grid(h = gate_cuts, recover = c(TRUE, FALSE)) %>%
+  pmap(\(h, recover) prev_at(h, recover)) %>%
+  list_rbind()
+
+core_counts <- prev_grid %>%
+  crossing(min_freq = freq_cuts) %>%
+  summarize(n_core = sum(freq >= min_freq), .by = c(method, gate_ih, min_freq))
+
+core_counts %>%
+  ggplot(aes(x = factor(min_freq), y = n_core, fill = method)) +
+  geom_col(position = position_dodge(0.8), width = 0.75) +
+  geom_text(aes(label = n_core), position = position_dodge(0.8),
+            angle = 90, hjust = -0.2, size = 3, color = "#5C3317") +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  scale_fill_manual(values = c("recovered" = "#A0522D", "strict only" = "#D2B48C")) +
+  facet_wrap(~ gate_ih, nrow = 1,
+             labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " ih"))) +
+  labs(x = "Minimum prevalence (fraction of metagenomes)",
+       y = "Number of core species", fill = NULL,
+       title = "AMD core size, recovered vs strict-only") +
+  theme_minimal() +
+  theme(legend.position = "top",
+        strip.text = element_text(face = "bold", color = "#5C3317"),
+        panel.grid.major.x = element_blank())
+```
+
+## 5. Diagnostics
+
+```{r diagnostics}
+# denominator: freq should never exceed 1
+n_srr
+n_distinct(recovered$match_name)
+range(prev_grid$freq)
+
+# species parsing: NAs and the shape of the names
+sum(is.na(species_key$species))
+head(species_key$query_name, 5)
+species_key %>% count(species, sort = TRUE, name = "n_genomes") %>% head(10)
+
+# how much of the recovered data is low-ih hits
+recovered %>% count(ih_bin = cut(intersect_hashes, c(0, 2, 9, 19, 49, Inf)))
+
+# are 1-2 ih hits everywhere? (if most genomes hit most metagenomes this way, it's noise)
+recovered %>%
+  filter(intersect_hashes < 3) %>%
+  distinct(query_name, match_name) %>%
+  count(query_name) %>%
+  summarize(median_srrs = median(n),
+            frac_genomes_in_90pct = mean(n >= 0.9 * n_srr))
+```
+
+# genus
+
+```{r}
+recovered <- recovered %>%
+  mutate(genus = word(str_trim(query_name), 2))
+
+species_key <- distinct(recovered, query_name, species, genus)
+```
+
+
+```{r}
+prev_at <- function(h, recover = TRUE, level = "species") {
+  d <- if (recover) {
+    recovered %>% filter(query_name %in% eligible_at(h), intersect_hashes >= recov_ih_min)
+  } else {
+    recovered %>% filter(intersect_hashes >= h)
+  }
+  d %>%
+    distinct(taxon = .data[[level]], match_name) %>%
+    count(taxon, name = "n_present") %>%
+    mutate(freq = n_present / n_srr,
+           gate_ih = h,
+           level = level,
+           method = if (recover) "recovered" else "strict only") %>%
+    arrange(desc(freq))
+}
+
+by_genus     <- prev_at(gate_ih_min, recover = TRUE,  level = "genus")
+strict_genus <- prev_at(gate_ih_min, recover = FALSE, level = "genus")
+
+by_genus %>%
+  select(taxon, freq_recovered = freq) %>%
+  left_join(strict_genus %>% select(taxon, freq_strict = freq), by = "taxon") %>%
+  mutate(freq_strict = replace_na(freq_strict, 0),
+         gain = freq_recovered - freq_strict) %>%
+  arrange(desc(gain)) %>%
+  head(15)
+
+
+```
+
