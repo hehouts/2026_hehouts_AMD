@@ -298,3 +298,50 @@ s__Ferroplasma sp002505185,93,0.9029126213592232
 s__JAJYDT01 sp021777335,93,0.9029126213592232
 s__JAJZXF01 sp021802485,93,0.9029126213592232
 s__JAKACA01 sp021796455,93,0.9029126213592232
+
+
+
+```{r}
+
+method_colors <- c("recovered" = "#A0522D", "strict only" = "#D2B48C")
+recov_colors  <- setNames(colorRampPalette(c("#F5DEB3", "#5C3317"))(length(recov_cuts)),
+                          paste("recov", recov_cuts))
+
+plot_core <- function(d, title, fill_var, fill_values) {
+  d %>%
+    mutate(level = factor(level, levels = levels)) %>%
+    ggplot(aes(x = factor(min_freq), y = n_core, fill = .data[[fill_var]])) +
+    geom_col(position = position_dodge(0.8), width = 0.75) +
+    geom_text(aes(label = n_core), position = position_dodge(0.8),
+              angle = 90, hjust = -0.2, size = 3, color = "#5C3317") +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    scale_fill_manual(values = fill_values) +
+    facet_grid(level ~ gate_ih, scales = "free_y",
+               labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " ih"))) +
+    labs(x = "Minimum prevalence (fraction of metagenomes)",
+         y = "Number of core taxa", fill = NULL, title = title) +
+    theme_minimal() +
+    theme(legend.position = "top",
+          strip.text = element_text(face = "bold", color = "#5C3317"),
+          panel.grid.major.x = element_blank())
+}
+
+# recovered at the chosen recovery threshold, plus strict-only
+at_recov <- core_counts %>% filter(method == "strict only" | recov_ih == recov_ih_min)
+
+plots <- list(
+  both      = plot_core(at_recov,
+                        sprintf("AMD core size, recovered (recov %d) vs strict-only", recov_ih_min),
+                        "method", method_colors),
+  recovered = plot_core(filter(at_recov, method == "recovered"),
+                        sprintf("AMD core size, recovered only (recov %d)", recov_ih_min),
+                        "method", method_colors),
+  strict    = plot_core(filter(at_recov, method == "strict only"),
+                        "AMD core size, strict-only",
+                        "method", method_colors),
+  by_recov  = plot_core(filter(core_counts, method == "recovered"),
+                        "AMD core size by recovery threshold",
+                        "series", recov_colors)
+)
+
+```

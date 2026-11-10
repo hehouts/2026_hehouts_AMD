@@ -1,0 +1,34 @@
+---
+title: "AMD Summary"
+date: "2026-11-06"
+output: html_document
+---
+
+
+https://github.com/hehouts/2026_hehouts_AMD
+
+## Summary
+This report looks for a core microbial community in acid mine drainage (AMD) water across 103 publicly archived metagenomes from six BioProjects. The approach is k-mer-based and doesn’t depend on location; it was first developed for pig gut microbiome work. Each metagenome is searched against the GTDB rs226 species-level pangenome sketch using sourmash branchwater manysearch, with no minimum threshold, so low-abundance taxa are kept and filtering happens afterward. Species prevalence is summarized across samples, and core candidates are species present in at least 95% of metagenomes. These results are shown at several containment thresholds (0.05, 0.10 and 0.20) so you can see how sensitive the core is to the cutoff. Candidates are compared with the five core genera from prior metagenome-based work by M. Tran (126 metagenomes from the same BioProjects) and with well-known AMD acidophiles such as Acidithiobacillus, Leptospirillum, Ferrovum and Gallionella.
+
+### More info
+- Number of metagenomes: 103
+- BioProjects: (6) PRJNA554371, PRJNA907387, PRJNA785287, PRJNA576319, PRJNA666025, PRJNA540505
+- Number of distinct sites: 
+- Sample map: [figure: sample locations, colored by BioProject]
+- Inclusion/exclusion criteria: 
+- Note on sample count: 103 here vs. 126 in Tran (same BioProjects); reason: 
+- Database: GTDB rs226, species-level singleton pangenome sketch (CDS-only k-mers, shared k-mers removed) built on _____
+- Number of species in database: 
+- Sketch file: gtdb-cds-rs226.species.singleton.sig.zip
+- k-mer size: k=21
+- Scaled value: 1000
+
+
+# Core prevalence plots
+
+The fast step. Reads the small CSVs written by `02_core_prevalence_compute.Rmd` and makes the core lists, recovery gain tables, and sensitivity plots. Nothing here touches the big recovery CSV.
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+```

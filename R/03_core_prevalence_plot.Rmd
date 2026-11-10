@@ -4,24 +4,6 @@ date: "2026-11-09"
 output: html_document
 ---
 
-https://github.com/hehouts/2026_hehouts_AMD
-
-## Summary
-This report looks for a core microbial community in acid mine drainage (AMD) water across 103 publicly archived metagenomes from six BioProjects. The approach is k-mer-based and doesn’t depend on location; it was first developed for pig gut microbiome work. Each metagenome is searched against the GTDB rs226 species-level pangenome sketch using sourmash branchwater manysearch, with no minimum threshold, so low-abundance taxa are kept and filtering happens afterward. Species prevalence is summarized across samples, and core candidates are species present in at least 95% of metagenomes. These results are shown at several containment thresholds (0.05, 0.10 and 0.20) so you can see how sensitive the core is to the cutoff. Candidates are compared with the five core genera from prior metagenome-based work by M. Tran (126 metagenomes from the same BioProjects) and with well-known AMD acidophiles such as Acidithiobacillus, Leptospirillum, Ferrovum and Gallionella.
-
-### More info
-- Number of metagenomes: 103
-- BioProjects: (6) PRJNA554371, PRJNA907387, PRJNA785287, PRJNA576319, PRJNA666025, PRJNA540505
-- Number of distinct sites: 
-- Sample map: [figure: sample locations, colored by BioProject]
-- Inclusion/exclusion criteria: 
-- Note on sample count: 103 here vs. 126 in Tran (same BioProjects); reason: 
-- Database: GTDB rs226, species-level singleton pangenome sketch (CDS-only k-mers, shared k-mers removed) built on _____
-- Number of species in database: 
-- Sketch file: gtdb-cds-rs226.species.singleton.sig.zip
-- k-mer size: k=21
-- Scaled value: 1000
-
 
 # Core prevalence plots
 
@@ -30,21 +12,24 @@ The fast step. Reads the small CSVs written by `02_core_prevalence_compute.Rmd` 
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
+#install.packages("paletteer")
+library(paletteer)
 ```
 
 ## Parameters
 
-Everything here can be changed without rerunning the compute Rmd. `gate_ih_min` has to be in the computed `gate_cuts`, `recov_ih_min` has to be in `recov_cuts`, and recovery can't be higher than the gate.
+These drive the calculations before the plots (core lists, recovery gain, core counts). Plot settings live in each plot chunk. `gate_ih_min` has to be in the computed `gate_cuts`, `recov_ih_min` has to be in `recov_cuts`, and recovery can't be higher than the gate.
 
 ```{r params}
-gate_ih_min  <- 20                               # gate used for the core lists, recovery gain, and plot 1
-recov_ih_min <- 1                                # recovery threshold used for the core lists, recovery gain, and plot 1
+gate_ih_min  <- 20                               # gate used for the core lists and recovery gain
+recov_ih_min <- 1                                # recovery threshold used for the core lists and recovery gain
 min_freq     <- 0.90                             # prevalence cutoff for "core"
-freq_cuts    <- c(0.80, 0.85, 0.90, 0.95, 0.999) # prevalence cutoffs for the sensitivity plots
+freq_cuts    <- c(0.80, 0.85, 0.90, 0.95, 0.999) # prevalence cutoffs for core counts and the plots
 
 plural <- c(species = "species", genus = "genera")
 in_dir <- "./core_prevalence"
 
+### Update User
 cat(sprintf("Core:  >= %.1f%% prevalence at gate %d, recovery %d\n", min_freq * 100, gate_ih_min, recov_ih_min))
 cat("Sensitivity cutoffs:", paste(freq_cuts, collapse = ", "), "\n")
 ```
@@ -54,6 +39,8 @@ cat("Sensitivity cutoffs:", paste(freq_cuts, collapse = ", "), "\n")
 ```{r load}
 grid_file   <- file.path(in_dir, "prevalence_grid.csv")
 params_file <- file.path(in_dir, "run_params.csv")
+
+### Check: prevalence files exist
 if (!all(file.exists(grid_file, params_file))) {
   stop('Files not found in "', in_dir, '". Run 02_core_prevalence_compute.Rmd first.')
 }
@@ -69,14 +56,16 @@ levels     <- str_split_1(run_params$levels, ";")
 gate_cuts  <- sort(unique(prevalence_grid$gate_ih))
 recov_cuts <- sort(unique(na.omit(prevalence_grid$recov_ih)))
 
+### Check: chosen gate and recovery were computed, and recovery <= gate
 stopifnot(gate_ih_min %in% gate_cuts, recov_ih_min %in% recov_cuts, recov_ih_min <= gate_ih_min)
 
+### Update User
 cat(format(nrow(prevalence_grid), big.mark = ","), "rows in prevalence_grid, computed", run_params$computed, "\n")
 cat(sprintf("Computed with gate_min_srr %s, %d metagenomes\n", run_params$gate_min_srr, n_srr))
 cat("Gates available:   ", paste(gate_cuts, collapse = ", "), "\n")
 cat("Recovery available:", paste(recov_cuts, collapse = ", "), "\n")
 
-# warn if the build CSV changed after the compute step
+### Check: build CSV unchanged since the compute step
 src <- run_params$source_file
 if (file.exists(src) && format(file.mtime(src), "%Y-%m-%d %H:%M:%S") != run_params$source_mtime) {
   cat("WARNING: the build CSV has changed since these were computed. Rerun 02_core_prevalence_compute.Rmd.\n")
@@ -93,15 +82,16 @@ by_level <- map(levels, \(l) filter(prevalence_grid, gate_ih == gate_ih_min, rec
   set_names(levels)
 core <- map(by_level, \(d) filter(d, freq >= min_freq))
 
-for (l in levels) {
-  cat(sprintf("%s: %d core %s at >= %.1f%% prevalence (of %d detected)\n",
-              l, nrow(core[[l]]), plural[[l]], min_freq * 100, nrow(by_level[[l]])))
-}
-
-for (l in levels) {
-  cat("\nCore", plural[[l]], "\n")
-  core[[l]] %>% select(taxon, n_present, freq) %>% print(n = 30)
-}
+### Update User
+#for (l in levels) {
+#  cat(sprintf("%s: %d core %s at >= %.1f%% prevalence (of %d detected)\n",
+#              l, nrow(core[[l]]), plural[[l]], min_freq * 100, nrow(by_level[[l]])))
+#}
+#
+#for (l in levels) {
+#  cat("\nCore", plural[[l]], "\n")
+#  core[[l]] %>% select(taxon, n_present, freq) %>% print(n = 30)
+#}
 ```
 
 ## 3. Recovery gain
@@ -124,6 +114,7 @@ gain_at <- function(l) {
 
 gains <- map(levels, gain_at) %>% set_names(levels)
 
+### Update User
 for (l in levels) {
   g <- gains[[l]]
   cat(sprintf("\n%s: %d gained, %d unchanged, %d lost (median gain %.2f)\n",
@@ -146,6 +137,7 @@ core_counts <- prevalence_grid %>%
   mutate(series = factor(if_else(method == "strict only", "strict only", paste("recov", recov_ih)),
                          levels = series_levels))
 
+### Update User
 for (l in levels) {
   cat("\nCore", plural[[l]], "by gate, recovery, and prevalence cutoff (blank = recovery above gate)\n")
   core_counts %>%
@@ -157,60 +149,334 @@ for (l in levels) {
 }
 ```
 
-## 5. Sensitivity plots
+## 5. Plotmaxxing
+# Species
 
-Plots 1 to 3 compare recovered (at `recov_ih_min`) with strict-only. Plot 4 compares the recovery thresholds with each other. Gates below a recovery threshold have no bar for it.
+## Plot A: Species core size, strict vs recovered
 
-```{r plots, fig.width = 11, fig.height = 7}
-method_colors <- c("recovered" = "#A0522D", "strict only" = "#D2B48C")
-recov_colors  <- setNames(colorRampPalette(c("#F5DEB3", "#5C3317"))(length(recov_cuts)),
-                          paste("recov", recov_cuts))
+Bars stack strict-only counts with the taxa added by recovery. The number is the total recovered core size. Gates below `plot_recov` have no recovered run, so they show strict only.
 
-plot_core <- function(d, title, fill_var, fill_values) {
-  d %>%
-    mutate(level = factor(level, levels = levels)) %>%
-    ggplot(aes(x = factor(min_freq), y = n_core, fill = .data[[fill_var]])) +
-    geom_col(position = position_dodge(0.8), width = 0.75) +
-    geom_text(aes(label = n_core), position = position_dodge(0.8),
-              angle = 90, hjust = -0.2, size = 3, color = "#5C3317") +
-    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
-    scale_fill_manual(values = fill_values) +
-    facet_grid(level ~ gate_ih, scales = "free_y",
-               labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " ih"))) +
-    labs(x = "Minimum prevalence (fraction of metagenomes)",
-         y = "Number of core taxa", fill = NULL, title = title) +
-    theme_minimal() +
-    theme(legend.position = "top",
-          strip.text = element_text(face = "bold", color = "#5C3317"),
-          panel.grid.major.x = element_blank())
-}
 
-# recovered at the chosen recovery threshold, plus strict-only
-at_recov <- core_counts %>% filter(method == "strict only" | recov_ih == recov_ih_min)
 
-plots <- list(
-  both      = plot_core(at_recov,
-                        sprintf("AMD core size, recovered (recov %d) vs strict-only", recov_ih_min),
-                        "method", method_colors),
-  recovered = plot_core(filter(at_recov, method == "recovered"),
-                        sprintf("AMD core size, recovered only (recov %d)", recov_ih_min),
-                        "method", method_colors),
-  strict    = plot_core(filter(at_recov, method == "strict only"),
-                        "AMD core size, strict-only",
-                        "method", method_colors),
-  by_recov  = plot_core(filter(core_counts, method == "recovered"),
-                        "AMD core size by recovery threshold",
-                        "series", recov_colors)
-)
 
-for (p in names(plots)) {
-  cat("Plot:", plots[[p]]$labels$title, "\n")
-  print(plots[[p]])
-}
+
+
+## Plot A: Species core size, strict vs recovered
+
+The brown bar is the recovered core and the tan strict-only bar sits over it. The number is the height of the taller bar, which is the recovered core size. Gates below `plot_recov` have no recovered run, so they show strict only.
+
+```{r plot-a, fig.width = 11, fig.height = 4.5}
+
+
+
+# recovery threshold for the recovered bars
+plot_recov <- 10
+
+# prevalence cutoffs on the x axis
+plot_cuts <- c(0.90, 0.95, 0.999)
+
+# totals above this are labeled inside the bar, at or below it above the bar
+label_split <- 200
+
+# y-axis limit
+y_max <- 400
+
+# colors from RColorBrewer YlOrBr (9 class)
+ylorbr <- paletteer_d("RColorBrewer::YlOrBr")
+
+# tan, strict only (#FEE391)
+tan <- as.character(ylorbr[3])
+
+# brown, recovered (#993404)
+brown <- as.character(ylorbr[8])
+
+### Check: plot_recov was computed
+#stopifnot(plot_recov %in% prevalence_grid$recov_ih)
+
+species_bars <- prevalence_grid %>%
+  # species rows, strict plus recovered at plot_recov
+  filter(level == "species", method == "strict only" | recov_ih == plot_recov) %>%
+  # one copy of each row per prevalence cutoff
+  crossing(min_freq = plot_cuts) %>%
+  # core size for each method x gate x cutoff
+  summarize(n_core = sum(freq >= min_freq), .by = c(method, gate_ih, min_freq)) %>%
+  # factor order sets drawing order: recovered first, strict drawn over it
+  mutate(method = factor(method, levels = c("recovered", "strict only")))
+
+species_labels <- species_bars %>%
+  # one label per bar, the height of the taller bar
+  summarize(total = max(n_core), .by = c(gate_ih, min_freq))
+
+ggplot(species_bars, aes(x = factor(min_freq), y = n_core, fill = method)) +
+  # strict and recovered side by side
+  geom_col(position = position_dodge(width = 0.8), width = 0.75) +
+  # large counts: label inside the bar, at the bottom
+  geom_text(data = filter(species_bars, n_core > label_split),
+            aes(x = factor(min_freq), y = 0, label = n_core, group = method),
+            inherit.aes = FALSE, position = position_dodge(width = 0.8),
+            angle = 90, hjust = -0.15, size = 3, color = brown) +
+  # small counts: label above the bar
+  geom_text(data = filter(species_bars, n_core <= label_split),
+            aes(x = factor(min_freq), y = n_core, label = n_core, group = method),
+            inherit.aes = FALSE, position = position_dodge(width = 0.8),
+            angle = 90, hjust = -0.15, size = 3, color = brown) +
+  scale_fill_manual(values = c("strict only" = tan, "recovered" = brown),
+                    breaks = c("strict only", "recovered")) +
+  scale_x_discrete(labels = \(x) paste0(as.numeric(x) * 100, "%")) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(ylim = c(0, y_max)) +
+  facet_wrap(~ gate_ih, nrow = 1,
+             labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " intersect hashes"))) +
+  labs(x = "Minimum prevalence (% of metagenomes)", y = "Core species", fill = NULL,
+       title = "Plot A: Species core size, strict vs recovered",
+       subtitle = sprintf("Recovery threshold: %d intersect hashes", plot_recov)) +
+  theme_minimal() +
+  theme(legend.position = "top",
+        strip.text = element_text(face = "bold", color = brown),
+        panel.grid.major.x = element_blank())
+```
+
+
+```{r plot-a, fig.width = 11, fig.height = 4.5}
+# plot settings
+plot_recov  <- 1      # recovery threshold for the "added by recovery" slice
+label_split <- 200    # totals above this are labeled inside the bar, at or below it above the bar
+y_max       <- 4000   # y-axis limit
+
+### Check: plot_recov was computed
+stopifnot(plot_recov %in% recov_cuts)
+
+species_stack <- core_counts %>%
+  # species rows, strict plus recovered at the plot recovery threshold
+  filter(level == "species", method == "strict only" | recov_ih == plot_recov) %>%
+  select(gate_ih, min_freq, method, n_core) %>%
+  # one row per gate x cutoff, with strict and recovered counts side by side
+  pivot_wider(names_from = method, values_from = n_core) %>%
+  # gates below plot_recov have no recovered run, so fall back to strict
+  mutate(recovered = coalesce(recovered, `strict only`),
+         # the slice recovery adds on top of strict
+         `added by recovery` = recovered - `strict only`)
+
+species_stack_long <- species_stack %>%
+  # back to long, one row per bar segment, for stacking
+  pivot_longer(c(`strict only`, `added by recovery`),
+               names_to = "component", values_to = "n") %>%
+  # factor order controls stacking: last level sits at the bottom
+  mutate(component = factor(component, levels = c("added by recovery", "strict only")))
+
+ggplot(species_stack_long, aes(x = factor(min_freq), y = n, fill = component)) +
+  geom_col(width = 0.75) +
+  # large totals: label inside the bar, at the bottom
+  geom_text(data = filter(species_stack, recovered > label_split),
+            aes(x = factor(min_freq), y = 0, label = recovered),
+            inherit.aes = FALSE, angle = 90, hjust = -0.15, size = 3, color = "#5C3317") +
+  # small totals: label above the bar
+  geom_text(data = filter(species_stack, recovered <= label_split),
+            aes(x = factor(min_freq), y = recovered, label = recovered),
+            inherit.aes = FALSE, angle = 90, hjust = -0.15, size = 3, color = "#5C3317") +
+  scale_fill_manual(values = c("strict only" = "#D2B48C", "added by recovery" = "#A0522D"),
+                    breaks = c("strict only", "added by recovery")) +
+  scale_x_discrete(labels = \(x) paste0(as.numeric(x) * 100, "%")) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(ylim = c(0, y_max)) +
+  facet_wrap(~ gate_ih, nrow = 1,
+             labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " intersect hashes"))) +
+  labs(x = "Minimum prevalence (% of metagenomes)", y = "Core species", fill = NULL,
+       title = "Plot A: Species core size, strict vs recovered",
+       subtitle = sprintf("Recovery threshold: %d intersect hashes", plot_recov)) +
+  theme_minimal() +
+  theme(legend.position = "top",
+        strip.text = element_text(face = "bold", color = "#5C3317"),
+        panel.grid.major.x = element_blank())
+```
+
+## Plot B: Species core size by recovery threshold
+
+One line per recovery threshold. The dashed tan line is strict only, for reference.
+
+```{r plot-b, fig.width = 11, fig.height = 4.5}
+# plot settings
+y_max <- 400   # y-axis limit
+# one sienna-to-dark-brown color per recovery threshold, named to match the series column
+recov_colors <- setNames(colorRampPalette(c("#C8703F", "#3B1F0E"))(length(recov_cuts)),
+                         paste("recov", recov_cuts))
+
+# recovered rows, one line per recovery threshold
+species_lines  <- core_counts %>% filter(level == "species", method == "recovered")
+# strict rows, drawn as the dashed reference line
+species_strict <- core_counts %>% filter(level == "species", method == "strict only")
+
+ggplot(species_lines, aes(x = factor(min_freq), y = n_core, color = series, group = series)) +
+  geom_line(data = species_strict,
+            aes(x = factor(min_freq), y = n_core, group = 1),
+            inherit.aes = FALSE, color = "#D2B48C", linetype = "dashed", linewidth = 0.8) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  scale_color_manual(values = recov_colors) +
+  scale_x_discrete(labels = \(x) paste0(as.numeric(x) * 100, "%")) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(ylim = c(0, y_max)) +
+  facet_wrap(~ gate_ih, nrow = 1,
+             labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " intersect hashes"))) +
+  labs(x = "Minimum prevalence (% of metagenomes)", y = "Core species", color = NULL,
+       title = "Plot B: Species core size by recovery threshold",
+       subtitle = "Dashed tan line = strict only") +
+  theme_minimal() +
+  theme(legend.position = "top",
+        strip.text = element_text(face = "bold", color = "#5C3317"),
+        panel.grid.major.x = element_blank())
+```
+
+# Genus
+
+## Plot C: Genus core size, strict vs recovered
+
+```{r plot-c, fig.width = 11, fig.height = 4.5}
+# plot settings
+plot_recov  <- 1     # recovery threshold for the "added by recovery" slice
+label_split <- 200   # totals above this are labeled inside the bar, at or below it above the bar
+
+### Check: plot_recov was computed
+stopifnot(plot_recov %in% recov_cuts)
+
+genus_stack <- core_counts %>%
+  # genus rows, strict plus recovered at the plot recovery threshold
+  filter(level == "genus", method == "strict only" | recov_ih == plot_recov) %>%
+  select(gate_ih, min_freq, method, n_core) %>%
+  # one row per gate x cutoff, with strict and recovered counts side by side
+  pivot_wider(names_from = method, values_from = n_core) %>%
+  # gates below plot_recov have no recovered run, so fall back to strict
+  mutate(recovered = coalesce(recovered, `strict only`),
+         # the slice recovery adds on top of strict
+         `added by recovery` = recovered - `strict only`)
+
+genus_stack_long <- genus_stack %>%
+  # back to long, one row per bar segment, for stacking
+  pivot_longer(c(`strict only`, `added by recovery`),
+               names_to = "component", values_to = "n") %>%
+  # factor order controls stacking: last level sits at the bottom
+  mutate(component = factor(component, levels = c("added by recovery", "strict only")))
+
+ggplot(genus_stack_long, aes(x = factor(min_freq), y = n, fill = component)) +
+  geom_col(width = 0.75) +
+  # large totals: label inside the bar, at the bottom
+  geom_text(data = filter(genus_stack, recovered > label_split),
+            aes(x = factor(min_freq), y = 0, label = recovered),
+            inherit.aes = FALSE, angle = 90, hjust = -0.15, size = 3, color = "#5C3317") +
+  # small totals: label above the bar
+  geom_text(data = filter(genus_stack, recovered <= label_split),
+            aes(x = factor(min_freq), y = recovered, label = recovered),
+            inherit.aes = FALSE, angle = 90, hjust = -0.15, size = 3, color = "#5C3317") +
+  scale_fill_manual(values = c("strict only" = "#D2B48C", "added by recovery" = "#A0522D"),
+                    breaks = c("strict only", "added by recovery")) +
+  scale_x_discrete(labels = \(x) paste0(as.numeric(x) * 100, "%")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  facet_wrap(~ gate_ih, nrow = 1,
+             labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " intersect hashes"))) +
+  labs(x = "Minimum prevalence (% of metagenomes)", y = "Core genera", fill = NULL,
+       title = "Plot C: Genus core size, strict vs recovered",
+       subtitle = sprintf("Recovery threshold: %d intersect hashes", plot_recov)) +
+  theme_minimal() +
+  theme(legend.position = "top",
+        strip.text = element_text(face = "bold", color = "#5C3317"),
+        panel.grid.major.x = element_blank())
+```
+
+## Plot D: Genus core size by recovery threshold
+
+```{r plot-d, fig.width = 11, fig.height = 4.5}
+# plot settings
+# one sienna-to-dark-brown color per recovery threshold, named to match the series column
+recov_colors <- setNames(colorRampPalette(c("#C8703F", "#3B1F0E"))(length(recov_cuts)),
+                         paste("recov", recov_cuts))
+
+# recovered rows, one line per recovery threshold
+genus_lines  <- core_counts %>% filter(level == "genus", method == "recovered")
+# strict rows, drawn as the dashed reference line
+genus_strict <- core_counts %>% filter(level == "genus", method == "strict only")
+
+ggplot(genus_lines, aes(x = factor(min_freq), y = n_core, color = series, group = series)) +
+  geom_line(data = genus_strict,
+            aes(x = factor(min_freq), y = n_core, group = 1),
+            inherit.aes = FALSE, color = "#D2B48C", linetype = "dashed", linewidth = 0.8) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 2) +
+  scale_color_manual(values = recov_colors) +
+  scale_x_discrete(labels = \(x) paste0(as.numeric(x) * 100, "%")) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.1))) +
+  facet_wrap(~ gate_ih, nrow = 1,
+             labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " intersect hashes"))) +
+  labs(x = "Minimum prevalence (% of metagenomes)", y = "Core genera", color = NULL,
+       title = "Plot D: Genus core size by recovery threshold",
+       subtitle = "Dashed tan line = strict only") +
+  theme_minimal() +
+  theme(legend.position = "top",
+        strip.text = element_text(face = "bold", color = "#5C3317"),
+        panel.grid.major.x = element_blank())
+```
+
+## Plot E: Species gained by recovery at a fixed gate
+
+Gate fixed at `plot_gate` intersect hashes. One panel per prevalence cutoff. Each bar is one recovery threshold: tan is the strict-only core, sienna is what recovery adds, and the +N label is that gain. The strict count is in each panel header.
+
+```{r plot-e, fig.width = 11, fig.height = 4.5}
+# plot settings
+plot_gate <- 50    # gate held fixed across panels
+y_max     <- 400   # y-axis limit
+
+### Check: plot_gate was computed
+stopifnot(plot_gate %in% gate_cuts)
+
+gate_strict <- core_counts %>%
+  # strict-only species core at the plot gate, one row per prevalence cutoff
+  filter(level == "species", method == "strict only", gate_ih == plot_gate) %>%
+  select(min_freq, strict = n_core)
+
+gate_recov <- core_counts %>%
+  # recovered species core at the plot gate, one row per cutoff x recovery threshold
+  filter(level == "species", method == "recovered", gate_ih == plot_gate) %>%
+  select(min_freq, recov_ih, recovered = n_core) %>%
+  # attach the strict count for the same cutoff
+  left_join(gate_strict, by = "min_freq") %>%
+  # species recovery adds on top of strict
+  mutate(added = recovered - strict)
+
+gate_long <- gate_recov %>%
+  # long format, one row per bar segment, for stacking
+  pivot_longer(c(strict, added), names_to = "component", values_to = "n") %>%
+  # factor order controls stacking: last level sits at the bottom
+  mutate(component = factor(component, levels = c("added", "strict")))
+
+# panel headers like "95% prevalence / strict = 142", keyed by min_freq
+gate_strips <- setNames(paste0(gate_strict$min_freq * 100, "% prevalence\nstrict = ",
+                               gate_strict$strict),
+                        gate_strict$min_freq)
+
+ggplot(gate_long, aes(x = factor(recov_ih), y = n, fill = component)) +
+  geom_col(width = 0.7) +
+  # gain from recovery, above each bar
+  geom_text(data = gate_recov,
+            aes(x = factor(recov_ih), y = recovered, label = paste0("+", added)),
+            inherit.aes = FALSE, vjust = -0.4, size = 3.2,
+            fontface = "bold", color = "#A0522D") +
+  scale_fill_manual(values = c("strict" = "#D2B48C", "added" = "#A0522D"),
+                    breaks = c("strict", "added"),
+                    labels = c("strict only", "added by recovery")) +
+  scale_x_discrete(labels = \(x) paste("recov", x)) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(ylim = c(0, y_max), clip = "off") +
+  facet_wrap(~ min_freq, nrow = 1, labeller = as_labeller(gate_strips)) +
+  labs(x = "Recovery threshold (intersect hashes)", y = "Core species", fill = NULL,
+       title = sprintf("Plot E: Species gained by recovery at gate %d", plot_gate)) +
+  theme_minimal() +
+  theme(legend.position = "top",
+        strip.text = element_text(face = "bold", color = "#5C3317"),
+        panel.grid.major.x = element_blank())
 ```
 
 
 ## Get species names
+
 ```{r}
 core_strict_20 <- read_csv("intermediate_files/core_prevalence/prevalence_grid.csv", show_col_types = FALSE) %>%
   filter(level == "species", method == "strict only", gate_ih == 20, freq >= 0.90) %>%
