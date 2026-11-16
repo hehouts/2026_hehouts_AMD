@@ -1,0 +1,87 @@
+---
+title: "AMD core microbes plots part 2"
+date: "2026-11-10"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+#install.packages("paletteer")
+library(paletteer)
+```
+
+
+```{r}
+getwd()
+```
+
+
+```{r}
+
+
+
+
+
+grid_file   <- file.path(in_dir, "prevalence_grid.csv")
+params_file <- file.path(in_dir, "run_params.csv")
+
+### Check: prevalence files exist
+#if (!all(file.exists(grid_file, params_file))) {
+#  stop('Files not found in "', in_dir, '". Run 02_core_prevalence_compute.Rmd first.')
+#}
+
+prevalence_grid <- read_csv(, show_col_types = FALSE,
+                            col_types = cols(taxon = "c", n_present = "i", freq = "d",
+                                             gate_ih = "i", recov_ih = "i",
+                                             level = "c", method = "c"))
+run_params <- read_csv(params_file, col_types = cols(.default = "c"))
+
+
+#### Plot polishing
+# counts above this are labeled inside the bar, at or below it above the bar
+label_split <- 200
+# y-axis limit
+y_max <- 400
+# colors from RColorBrewer YlOrBr (9 class)
+ylorbr <- paletteer_d("RColorBrewer::YlOrBr")
+# tan, strict only (#FEE391)
+tan <- as.character(ylorbr[3])
+# brown, panel headers (#993404)
+brown <- as.character(ylorbr[8])
+
+
+
+# prevalence cutoffs on the x axis
+plot_cuts <- c(0.90, 0.95, 0.999)
+
+strict_bars <- prevalence_grid %>%
+  # species strict-only rows
+  filter(level == "species", method == "strict only") %>%
+  # one copy of each row per prevalence cutoff
+  crossing(min_freq = plot_cuts) %>%
+  # core size for each gate x cutoff
+  summarize(n_core = sum(freq >= min_freq), .by = c(gate_ih, min_freq))
+
+ggplot(strict_bars, aes(x = factor(min_freq), y = n_core)) +
+  geom_col(width = 0.75, fill = tan) +
+  # large counts: label inside the bar, at the bottom
+  geom_text(data = filter(strict_bars, n_core > label_split),
+            aes(y = 0, label = n_core),
+            angle = 90, hjust = -0.15, vjust = 0.5, size = 3, color = "navy") +
+  # small counts: label above the bar
+  geom_text(data = filter(strict_bars, n_core <= label_split),
+            aes(y = n_core, label = n_core),
+            angle = 90, hjust = -0.15, vjust = 0.5, size = 3, color = "navy") +
+  scale_x_discrete(labels = \(x) paste0(as.numeric(x) * 100, "%")) +
+  scale_y_continuous(expand = c(0, 0)) +
+  coord_cartesian(ylim = c(0, y_max)) +
+  facet_wrap(~ gate_ih, nrow = 1,
+             labeller = labeller(gate_ih = \(x) paste0("gate ≥ ", x, " intersect hashes"))) +
+  labs(x = "Minimum prevalence (% of metagenomes)", y = "Core species",
+       title = "Plot A.1: Species core size, strict only") +
+  theme_minimal() +
+  theme(strip.text = element_text(face = "bold", color = brown),
+        panel.grid.major.x = element_blank())
+```
+
